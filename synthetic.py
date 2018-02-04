@@ -26,8 +26,8 @@ def marked_point_process(n_users):
     print(D)
     return D
 
-def import_data(n_items):
-    return [loadtxt('./synthetic/item'+str(i)) for i in range(n_items)]
+def import_data(n_items, n_users):
+    return [loadtxt('./synthetic_'+str(n_items)+'_'+str(n_users)+'/item'+str(i)) for i in range(n_items)]
 
 if __name__ == '__main__':
     if not len(sys.argv) == 3:

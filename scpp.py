@@ -22,18 +22,29 @@ def C_u(gamma, user):
     return C
 
 def M_i(item_id):
-    return len(np.where(Z[item_id]==0)[0])
+    return len(np.where(Z[item_id]==-1)[0])
 
 def M_uu(user1, user2):
     cnt = 0
     for i in range(n_items):
-        cause = np.where(Z[i]==user1)[0]
-        effect = np.where(D[i][cause, 0]==user2)[0]
+        if -1 < user1:
+            cause = np.where(Z[i] > -1)[0]
+            cause = np.where(D[i][Z[i][cause], 1] == user1)[0]
+        else:
+            cause = np.where(Z[i] == -1)[0]
+        effect = np.where(D[i][cause, 1] == user2)[0]
         cnt += len(effect)
     return cnt
 
 def M_u(user):
-    return sum([len(np.where(Z[i]==user)[0]) for i in range(n_items)])
+    cnt = 0
+    for i in range(n_items):
+        if -1 < user:
+            index = np.where(Z[i] > -1)[0]
+        else:
+            index = np.where(Z[i] == -1)[0]
+        cnt += len(np.where(D[i][Z[i][index], 1] == user)[0])
+    return cnt
 
 def A_u0(gamma, user):
     return gamma * C_u(gamma, user)
@@ -61,7 +72,7 @@ def update_gamma(gamma, a, b):
     for i in range(n_items):
         idx = np.where(Z[i] > 0)[0]
         deriv1 += np.sum(D[i][idx][:, 0] - D[i][Z[i][idx]][:, 0])
-    for user in range(1, n_users):
+    for user in range(n_users):
         # compute components
         M = M_u(user)
         Au0 = A_u0(gamma, user)
@@ -79,38 +90,43 @@ def update_gamma(gamma, a, b):
 
 def update_beta(beta):
     term1 = term2 = 0.
-    for u0 in range(n_users):
-        for u1 in range(1, n_users):
+    for u0 in range(-1, n_users):
+        for u1 in range(n_users):
             term1 += sp.digamma(M_uu(u0, u1) + beta) - sp.digamma(beta)
-    for u in range(n_users):
+    for u in range(-1, n_users):
         term2 += sp.digamma(M_u(u) + beta * n_users) - sp.digamma(beta * n_users)
     return beta * term1 / term2
 
 def compute_lh(gamma, beta, a, b):
     # the joint likelihood p(D, Z| gamma, beta, a, b)
-    llh = 0.
+    llh = INF
     cnt = 0
     for i in range(n_items):
         events = D[i]
-        for n in range(1, len(events)):
+        for n in range(len(events)):
             zin = Z[i][n]
-            if zin == 0: continue
+            if zin == -1: continue
             cnt += 1
             llh += events[n, 0] - events[zin, 0]
     print('# of cascade:', cnt)
     llh = -gamma * llh
     llh += (n_users + n_items) * np.log(np.power(b, a) / sp.gamma(a))
-    for u in range(1, n_users):
+    for u in range(n_users):
         Mu = M_u(u)
         llh += np.log(sp.gamma(Mu + a) / np.power(C_u(gamma, u) + b, Mu + a))
     for i in range(n_items):
         Mi = M_i(i)
         llh += np.log(sp.gamma(Mi + a) / np.power(D[i][-1, 0] + b, Mi + a))
-    llh += (n_users + 1) * np.log(sp.gamma(beta * n_users) / np.power(sp.gamma(beta), n_users))
-    for u0 in range(n_users):
-        for u1 in range(1, n_users):
+    llh += (n_users + 1) * np.log(sp.gamma(beta * n_users))
+    llh -= n_users * np.log(sp.gamma(beta))
+    for u0 in range(-1, n_users):
+        for u1 in range(n_users):
             llh += np.log(sp.gamma(M_uu(u0, u1) + beta))
-        llh -= np.log(sp.gamma(M_u(u0) + beta * n_users))
+        # print(M_u(u0))
+        val = sp.gamma(M_u(u0) + beta * n_users)
+        # print(val)
+        # print(np.log(sp.gamma(M_u(u0) + beta * n_users)))
+        # llh -= np.log(sp.gamma(M_u(u0) + beta * n_users))
     return llh
 
 def sample_latent_index(gamma, beta, a, b):
@@ -120,30 +136,32 @@ def sample_latent_index(gamma, beta, a, b):
         T = D[item_id][-1, 0] # Ci = T
         for eid in range(len(D[item_id])):
             if eid == 0:
-                Z[item_id][0] = 0
+                Z[item_id][0] = -1
                 continue
             # reset z_in
-            Z[item_id][eid] = -1
-            pz = np.zeros(eid)
+            Z[item_id][eid] = -INF
+            pz = np.zeros(eid + 1)
             tin, uin = D[item_id][eid]
             # background intensity
             pz[0] = M_i(item_id) + a 
             pz[0] /= T + b
-            pz[0] *= M_uu(0, uin) + beta
-            pz[0] /= M_u(0) + beta * n_users
+            pz[0] *= M_uu(-1, uin) + beta
+            pz[0] /= M_u(-1) + beta * n_users
             # otherwise
-            for i in range(1, eid):
+            for i in range(eid):
                 tiy, uiy = D[item_id][i]
-                pz[i] = np.exp(-gamma * (tin - tiy))
-                pz[i] *= M_u(uiy) + a
-                pz[i] /= C_u(gamma, uiy) + b
-                pz[i] *= M_uu(uiy, uin) + beta
-                pz[i] /= M_u(uiy) + beta * n_users
+                pz[i + 1] = np.exp(-gamma * (tin - tiy))
+                pz[i + 1] *= M_u(uiy) + a
+                pz[i + 1] /= C_u(gamma, uiy) + b
+                pz[i + 1] *= M_uu(uiy, uin) + beta
+                pz[i + 1] /= M_u(uiy) + beta * n_users
+                if pz[i + 1] < ZERO: pz[i + 1] = ZERO
             pz = pz / np.sum(pz)
-            Z[item_id][eid] = np.random.choice(np.arange(eid), size=1, p=pz)
+            # print(pz)
+            Z[item_id][eid] = np.random.choice(np.arange(eid + 1), size=1, p=pz) - 1
     print('')
 
-def inference(gamma=10, beta=0.1, a=1, b=1):
+def inference(gamma=0.01, beta=0.1, a=1, b=1):
     # stochastic EM algorithm
     lh = prev = 0.
     for i in range(MAX_ITER):
@@ -174,9 +192,9 @@ def inference(gamma=10, beta=0.1, a=1, b=1):
 if __name__ == '__main__':
 
     n_items = 500
-    n_users = 20 + 1 # of users + background
+    n_users = 50 # of users + background
     # marked point process
-    D = import_data(n_items)
+    D = import_data(n_items, n_users)
     # latent variable set
     Z = [np.zeros(len(D[i]), dtype=np.int64) for i in range(n_items)]
 
