@@ -1,201 +1,222 @@
+import sys
+
 import numpy as np
 import scipy.stats as st
 import scipy.special as sp
 from progressbar import ProgressBar
 
 from synthetic import *
+
 ZERO = 1.e-10
 INF = 1.e+10
 MAX_ITER = 1000
 
-global D, Z
+global D, Z, T, Mu, Muu
+global Cu
 global n_items
 global n_users
 
-def C_u(gamma, user):
+class Workspace:
+    def __init__(self, n_items, n_users):
+        # init latent variable set
+        self.Z = [np.zeros(len(D[i]), dtype=np.int64) - 1 for i in range(n_items)]
+        # Z = [np.arange(len(D[i]), dtype=np.int64) - 1 for i in range(n_items)]
+
+        # set observation period
+        self.T = max([D[i][-1, 0] for i in range(n_items)])
+
+        # init count
+        self.M = np.zeros((n_users, n_users))
+        self.M_ = np.zeros(n_users) # for bg
+        for i in range(n_items):
+            D_ = D[i][:, 1]
+            for u in range(n_users):
+                self.M_[u] += len(D_[D_ == u])
+
+    def Mu(self, user_id):
+        if user_id == -1:
+            return np.sum(self.M_)
+        else:
+            return np.sum(self.M[user_id, :])
+
+
+def C_u(T, gamma, user):
     C = 0.
     for i in range(n_items):
-        T = D[i][-1, 0]
         idx = np.where(D[i][:, 1] == user)[0]
+        if len(idx) == 0: continue
         t = D[i][idx, 0] #.astype(np.float64)
-        C += np.sum(1 - np.exp(-gamma * (T - t))) / gamma
+        C += np.sum(1 - np.exp(-gamma * (ws.T - t))) / gamma
     return C
 
-def M_i(item_id):
-    return len(np.where(Z[item_id]==-1)[0])
+def A_u0(T, gamma, user):
+    return gamma * C_u(T, gamma, user)
 
-def M_uu(user1, user2):
-    cnt = 0
-    for i in range(n_items):
-        if -1 < user1:
-            cause = np.where(Z[i] > -1)[0]
-            cause = np.where(D[i][Z[i][cause], 1] == user1)[0]
-        else:
-            cause = np.where(Z[i] == -1)[0]
-        effect = np.where(D[i][cause, 1] == user2)[0]
-        cnt += len(effect)
-    return cnt
-
-def M_u(user):
-    cnt = 0
-    for i in range(n_items):
-        if -1 < user:
-            index = np.where(Z[i] > -1)[0]
-        else:
-            index = np.where(Z[i] == -1)[0]
-        cnt += len(np.where(D[i][Z[i][index], 1] == user)[0])
-    return cnt
-
-def A_u0(gamma, user):
-    return gamma * C_u(gamma, user)
 # A'
-def A_u1(gamma, user):
+def A_u1(T, gamma, user):
     val = 0.
     for i in range(n_items):
-        T = D[i][-1, 0]
         idx = np.where(D[i][:, 1] == user)[0]
         t = D[i][idx, 0] #.astype(np.float64)
         val += np.sum(np.exp(-gamma * (T - t)) * (T - t))
     return -1 * val
 # A''
-def A_u2(gamma, user):
+def A_u2(T, gamma, user):
     val = 0.
     for i in range(n_items):
         idx = np.where(D[i][:, 1] == user)[0]
         t = D[i][idx, 0] #.astype(np.float64)
-        T = D[i][-1, 0]
         val += np.sum(np.exp(-gamma * (T - t)) * np.power((T - t), 2))
     return val
 
-def update_gamma(gamma, a, b):
+def update_gamma(ws, gamma, a, b):
+    print('\nupdate gamma...')
     deriv1 = deriv2 = 0.
     for i in range(n_items):
-        idx = np.where(Z[i] > 0)[0]
-        deriv1 += np.sum(D[i][idx][:, 0] - D[i][Z[i][idx]][:, 0])
+        idx = np.where(ws.Z[i] > -1)[0]
+        deriv1 += np.sum(D[i][idx, 0] - D[i][ws.Z[i][idx], 0])
+
+    progress = ProgressBar(0, n_users).start()
     for user in range(n_users):
+        progress.update(user)
         # compute components
-        M = M_u(user)
-        Au0 = A_u0(gamma, user)
-        Au1 = A_u1(gamma, user)
-        Au2 = A_u2(gamma, user)
-        val1 = (M + a) / (Au0 + np.power(gamma, b))
-        val2 = -1 * Au1 / gamma + Au1
+        Au0 = A_u0(ws.T, gamma, user)
+        Au1 = A_u1(ws.T, gamma, user)
+        Au2 = A_u2(ws.T, gamma, user)
+        val1 = (ws.Mu(user) + a) / (Au0 + gamma * b)
+        val2 = -1 * Au0 / gamma + Au1
         # for first derivative
         deriv1 += val1 * val2
         # for second derivative
-        deriv2 += val1 * (Au2 + val2 * ((Au1 + b) / (Au0 + np.power(gamma, b)) + 1 / gamma))
-    deriv1 *= -1
-    deriv2 *= -1
-    return gamma - deriv1 / deriv2
+        deriv2 += val1 * (Au2 + val2 * ((Au1 + b) / (Au0 + gamma * b) + 1 / gamma))
+    return gamma - deriv1 / deriv2 if gamma - deriv1 / deriv2 > 0 else ZERO
 
-def update_beta(beta):
-    term1 = term2 = 0.
-    for u0 in range(-1, n_users):
-        for u1 in range(n_users):
-            term1 += sp.digamma(M_uu(u0, u1) + beta) - sp.digamma(beta)
-    for u in range(-1, n_users):
-        term2 += sp.digamma(M_u(u) + beta * n_users) - sp.digamma(beta * n_users)
+def update_beta(ws, beta):
+    print('\nupdate beta...')
+    progress = ProgressBar(0, n_users + 1).start()
+    # for background intensity
+    term1 = np.sum([sp.digamma(ws.M_[u1] + beta * n_users) - sp.digamma(beta * n_users) for u1 in range(n_users)])
+    term2 = sp.digamma(ws.Mu(-1) + beta) - sp.digamma(beta)
+
+    for u0 in range(n_users):
+        progress.update(u0)
+        Mu = ws.Mu(u0)
+        if Mu == 0: continue
+        term1 += np.sum([sp.digamma(ws.M[u0, u1] + beta) - sp.digamma(beta) for u1 in range(n_users)])
+        term2 += sp.digamma(Mu + beta) - sp.digamma(beta)
     return beta * term1 / term2
 
-def compute_lh(gamma, beta, a, b):
+def compute_lh(ws, gamma, beta, a, b):
     # the joint likelihood p(D, Z| gamma, beta, a, b)
-    llh = INF
-    cnt = 0
+    llh = cnt = 0
     for i in range(n_items):
-        events = D[i]
-        for n in range(len(events)):
-            zin = Z[i][n]
+        for n in range(len(D[i])):
+            zin = ws.Z[i][n]
             if zin == -1: continue
+            llh += D[i][n, 0] - D[i][zin, 0]
             cnt += 1
-            llh += events[n, 0] - events[zin, 0]
-    print('# of cascade:', cnt)
-    llh = -gamma * llh
+    print('\n# of cascade:', cnt)
+    llh = -1 * gamma * llh
+
     llh += (n_users + n_items) * np.log(np.power(b, a) / sp.gamma(a))
     for u in range(n_users):
-        Mu = M_u(u)
-        llh += np.log(sp.gamma(Mu + a) / np.power(C_u(gamma, u) + b, Mu + a))
+        Mu = ws.Mu(u)
+        llh += np.log(sp.gamma(Mu + a))
+        llh -= (Mu + a) * np.log(C_u(ws.T, gamma, u) + b)
     for i in range(n_items):
-        Mi = M_i(i)
-        llh += np.log(sp.gamma(Mi + a) / np.power(D[i][-1, 0] + b, Mi + a))
-    llh += (n_users + 1) * np.log(sp.gamma(beta * n_users))
-    llh -= n_users * np.log(sp.gamma(beta))
-    for u0 in range(-1, n_users):
-        for u1 in range(n_users):
-            llh += np.log(sp.gamma(M_uu(u0, u1) + beta))
-        # print(M_u(u0))
-        val = sp.gamma(M_u(u0) + beta * n_users)
-        # print(val)
-        # print(np.log(sp.gamma(M_u(u0) + beta * n_users)))
-        # llh -= np.log(sp.gamma(M_u(u0) + beta * n_users))
+        Mi = len(ws.Z[i][ws.Z[i] == -1])
+        llh += np.log(sp.gamma(Mi + a))
+        llh -= (Mi + a) * np.log(ws.T + b)
+
+    llh += (n_users + 1) * (sp.gammaln(beta * n_users) - n_users * sp.gammaln(beta))
+    llh += np.sum([sp.gammaln(ws.M_[u1] + beta) for u1 in range(n_users)])
+    llh -= sp.gammaln(ws.Mu(-1) + beta * n_users)
+    for u0 in range(n_users):
+        llh += np.sum([sp.gammaln(ws.M[u0, u1] + beta) for u1 in range(n_users)])
+        llh -= sp.gammaln(ws.Mu(u0) + beta * n_users)
     return llh
 
-def sample_latent_index(gamma, beta, a, b):
+def sample_latent_index(ws, gamma, beta, a, b):
+    print('sampling latent indexes...')
     progress = ProgressBar(0, n_items).start()
     for item_id in range(n_items):
         progress.update(item_id)
-        T = D[item_id][-1, 0] # Ci = T
-        for eid in range(len(D[item_id])):
+        D_ = D[item_id]
+        for eid in range(len(D_)):
             if eid == 0:
-                Z[item_id][0] = -1
+                ws.Z[item_id][0] = -1
                 continue
-            # reset z_in
-            Z[item_id][eid] = -INF
-            pz = np.zeros(eid + 1)
-            tin, uin = D[item_id][eid]
-            # background intensity
-            pz[0] = M_i(item_id) + a 
-            pz[0] /= T + b
-            pz[0] *= M_uu(-1, uin) + beta
-            pz[0] /= M_u(-1) + beta * n_users
-            # otherwise
-            for i in range(eid):
-                tiy, uiy = D[item_id][i]
-                pz[i + 1] = np.exp(-gamma * (tin - tiy))
-                pz[i + 1] *= M_u(uiy) + a
-                pz[i + 1] /= C_u(gamma, uiy) + b
-                pz[i + 1] *= M_uu(uiy, uin) + beta
-                pz[i + 1] /= M_u(uiy) + beta * n_users
-                if pz[i + 1] < ZERO: pz[i + 1] = ZERO
-            pz = pz / np.sum(pz)
-            # print(pz)
-            Z[item_id][eid] = np.random.choice(np.arange(eid + 1), size=1, p=pz) - 1
-    print('')
+            tin, uin = D_[eid]
+            tin, uin = int(tin), int(uin)
 
-def inference(gamma=0.01, beta=0.1, a=1, b=1):
+            # reset z_in
+            z_old = ws.Z[item_id][eid]
+            if z_old == -1:
+                ws.M_[uin] -= 1 # decrement
+            else:
+                _, u_old = D_[z_old]
+                ws.M[int(u_old), uin] -= 1 # decrement
+
+            ws.Z[item_id][eid] = -INF
+            pz = np.zeros(eid + 1)
+            # if y = 0
+            Mi = len(ws.Z[item_id][ws.Z[item_id] == -1])
+            pz[0] = Mi + a 
+            pz[0] /= ws.T + b
+            pz[0] *= ws.M_[uin] + beta
+            pz[0] /= ws.Mu(-1) + beta * n_users
+            # otherwise
+            for y in range(eid):
+                tiy, uiy = D_[y]
+                tiy, uiy = int(tiy), int(uiy)
+                pz[y + 1] = np.exp(-1 * gamma * (tin - tiy))
+                pz[y + 1] *= ws.Mu(uiy) + a
+                pz[y + 1] /= C_u(ws.T, gamma, uiy) + b
+                pz[y + 1] *= ws.M[uiy, uin] + beta
+                pz[y + 1] /= ws.Mu(uiy) + beta * n_users
+            pz[pz < ZERO] = ZERO
+            pz = pz / np.sum(pz)
+            cause = np.random.choice(np.arange(eid + 1), size=1, p=pz) - 1
+            ws.Z[item_id][eid] = cause
+            if not cause == -1:
+                uiz = int(D_[cause, 1])
+                ws.M[uiz, uin] += 1
+            else:
+                ws.M_[uin] += 1
+
+def inference(ws, gamma=1, beta=2, a=1, b=1):
     # stochastic EM algorithm
-    lh = prev = 0.
+    prev = -INF
     for i in range(MAX_ITER):
-        print('===============')
+        print('============')
         print('Iter: ', i + 1)
-        print('===============')
-        print('E-step:')
-        print('sampling latent indexes...')
+        print('============')
+
         # E step
-        sample_latent_index(gamma, beta, a, b)
+        sample_latent_index(ws, gamma, beta, a, b)
+
         # M step
-        print('M-step:')
-        prev = gamma
-        gamma = update_gamma(gamma, a, b)
-        print('Gamma: ', prev, '->', gamma)
-        if gamma < 0: gamma = ZERO
-        prev = beta
-        beta = update_beta(beta)
-        print('Beta: ', prev, '->', beta)
-        # if not i % 5:
+        gamma = update_gamma(ws, gamma, a, b)
+        if gamma < 0:
+            exit('invalid gamma')
+        beta = update_beta(ws, beta)
+
+        lh = compute_lh(ws, gamma, beta, a, b)
+        print('\n\nGamma =', gamma)
+        print('\n\nBeta  =', beta)
+        if lh - prev > 0:
+            print('\nL-likelihood = {0} (+{1})\n'.format(lh, lh - prev))
+        else:
+            print('\nL-likelihood = {0} ({1})\n'.format(lh, lh - prev))
         prev = lh
-        lh = compute_lh(gamma, beta, a, b)
-        print('Likelihood =', prev)
-        print('Likelihood =', lh)
-            # if np.fabs(lh - prev) < 10: break
 
 
 if __name__ == '__main__':
 
-    n_items = 500
-    n_users = 50 # of users + background
-    # marked point process
+    # load marked point process
+    n_items, n_users = int(sys.argv[1]), int(sys.argv[2])
     D = import_data(n_items, n_users)
-    # latent variable set
-    Z = [np.zeros(len(D[i]), dtype=np.int64) for i in range(n_items)]
 
-    inference()
+    ws = Workspace(n_items, n_users)
+
+    inference(ws)
