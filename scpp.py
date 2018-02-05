@@ -7,9 +7,11 @@ from progressbar import ProgressBar
 
 from synthetic import *
 
+OUTDIR = './result/dat_tmp/'
 ZERO = 1.e-10
 INF = 1.e+10
 MAX_ITER = 1000
+TH = 1.e+1
 
 global D, Z, T, Mu, Muu
 global Cu
@@ -187,6 +189,7 @@ def sample_latent_index(ws, gamma, beta, a, b):
 def inference(ws, gamma=1, beta=2, a=1, b=1):
     # stochastic EM algorithm
     prev = -INF
+    buff = 0
     for i in range(MAX_ITER):
         print('============')
         print('Iter: ', i + 1)
@@ -204,11 +207,38 @@ def inference(ws, gamma=1, beta=2, a=1, b=1):
         lh = compute_lh(ws, gamma, beta, a, b)
         print('\n\nGamma =', gamma)
         print('\n\nBeta  =', beta)
-        if lh - prev > 0:
+        diff = lh - prev
+        if diff > 0:
             print('\nL-likelihood = {0} (+{1})\n'.format(lh, lh - prev))
         else:
             print('\nL-likelihood = {0} ({1})\n'.format(lh, lh - prev))
         prev = lh
+        if np.fabs(diff) < TH:
+            buff += 1
+            if buff > 10:
+                break
+
+    Mi = np.array([len(ws.Z[i][ws.Z[i] == -1]) for i in range(n_items)])
+    Mu = np.array([ws.Mu(u) for u in range(n_users)])
+    Ci = ws.T
+    Cu = np.array([C_u(ws.T, gamma, u) for u in range(n_users)])
+
+    alpha_i = (Mi + a) / (Ci + b)
+    alpha_u = (Mu + a) / (Cu + b)
+    theta_uu = np.zeros((n_users, n_users))
+    for u in range(n_users):
+        theta_uu[u] = (ws.M[u] + beta) / (Mu[u] + beta * n_users)
+
+    if os.path.exists(OUTDIR):
+        shutil.rmtree(OUTDIR)
+    os.mkdir(OUTDIR)
+    with open(OUTDIR + 'gamma', 'r') as f:
+        f.write(gamma)
+    with open(OUTDIR + 'beta', 'r') as f:
+        f.write(beta)
+    np.savetxt(OUTDIR + 'alpha_i', alpha_i)
+    np.savetxt(OUTDIR + 'alpha_u', alpha_u)
+    np.savetxt(OUTDIR + 'theta_uu', theta_uu)
 
 
 if __name__ == '__main__':
