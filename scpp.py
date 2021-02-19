@@ -1,253 +1,318 @@
-import sys
+""" 
+    Reference:
+    Iwata, Tomoharu, Amar Shah, and Zoubin Ghahramani.
+    "Discovering latent influence in online social activities
+    via shared cascade poisson processes."
+    Proceedings of the 19th ACM SIGKDD international conference
+    on Knowledge discovery and data mining. 2013.
+"""
 
+import warnings
+import pickle
 import numpy as np
-import scipy.stats as st
-import scipy.special as sp
-from progressbar import ProgressBar
+from scipy.special import digamma, gammaln
+from tqdm import tqdm, trange
 
-from synthetic import *
 
-OUTDIR = './result/dat_tmp/'
-ZERO = 1.e-10
-INF = 1.e+10
-MAX_ITER = 1000
-TH = 1.e+1
+class SCPP():
+    def __init__(self):
 
-global D, Z, T, Mu, Muu
-global Cu
-global n_items
-global n_users
+        # Parameters
 
-class Workspace:
-    def __init__(self, n_items, n_users):
-        # init latent variable set
-        self.Z = [np.zeros(len(D[i]), dtype=np.int64) - 1 for i in range(n_items)]
-        # Z = [np.arange(len(D[i]), dtype=np.int64) - 1 for i in range(n_items)]
+        self.alpha_i = None
+        self.alpha_u = None
+        self.theta = None
 
-        # set observation period
-        self.T = max([D[i][-1, 0] for i in range(n_items)])
+    def _init_variables(self):
 
-        # init count
-        self.M = np.zeros((n_users, n_users))
-        self.M_ = np.zeros(n_users) # for bg
-        for i in range(n_items):
-            D_ = D[i][:, 1]
-            for u in range(n_users):
-                self.M_[u] += len(D_[D_ == u])
+        # Latent variable to keep causality
+        self.Z = [np.full(len(D), -1, dtype='int32') for D in self.events]
 
-    def Mu(self, user_id):
-        if user_id == -1:
-            return np.sum(self.M_)
+        # Variable to keep counts of causal users
+        self.M = np.zeros((self.n_users + 1, self.n_users))
+
+        # Assume that all events are caused by the back ground intensity
+        for ii, Di in enumerate(self.events):
+            for u in range(self.n_users):
+                self.M[-1, u] += len(Di.query('user_id==@u'))
+
+    def _prep_transaction(self, data):
+
+        data['item_id'] = data['item_id'].astype('int32')
+        data['user_id'] = data['user_id'].astype('int32')
+        data['date_id'] = data['date_id'].astype('int32')
+
+        # Stats
+
+        self.n_items = data['item_id'].max() + 1
+        self.n_users = data['user_id'].max() + 1
+        self.T = data['date_id'].max()
+
+        # List of event history per item
+
+        self.events = []
+        for i in range(self.n_items):
+            self.events.append(
+                data.query('item_id==@i').sort_values('date_id').reset_index())
+
+    def fit(self, data, gamma=1, beta=2, a=1, b=1,
+            max_iter=100, tol=1e+2, min_gamma=1e-10, max_beta=1e+12,
+            verbose=True):
+
+        # Initialization
+
+        self._prep_transaction(data)
+        self._init_variables()
+
+        self.train_hist = []  # history of loglikelihood
+
+        for iteration in range(max_iter):
+
+            # E step
+
+            self.collapsed_gibbs_sampling(beta, gamma, a, b)
+
+            # M step
+
+            gamma = self.update_gamma(gamma, a, b)
+            beta  = self.update_beta(beta)
+
+            # Copmute loglikelihood
+
+            llh = self.loglikelihood(gamma, beta, a, b)
+            self.train_hist.append(llh)
+
+            # if iteration > 2 and train_hist[-1] - train_hist[-2] < tol:
+            #     break
+
+            if verbose == True:
+                print()
+                print()
+                print('=' * 20)
+                print(' Iteration =', iteration + 1)
+                print('=' * 20)
+                print(' gamma =', gamma)
+                print(' beta  =', beta)
+                print(' llh   =', llh)
+                print()
+
+        # Compute results
+
+        Mi = np.array([(Zi == -1).sum() for Zi in self.Z])  #
+        Mu = np.array([self.Mu(u) for u in range(self.n_users)])
+        Ci = self.T
+        Cu = np.array([self.Cu(Ci, gamma, u) for u in range(self.n_users)])
+
+        self.alpha_i = (Mi + a) / (Ci + b)
+        self.alpha_u = (Mu + a) / (Cu + b)
+
+        self.theta = np.array([
+            (self.M[u] + beta)
+            / (self.Mu(u) + beta * self.n_users)
+            for u in range(self.n_users)
+        ])
+
+    def collapsed_gibbs_sampling(self, beta, gamma, a, b):
+
+        # desc = 'CollapsedGibbsSampling'
+        for ii, Di in enumerate(self.events):
+
+            desc = 'Item {}'.format(ii + 1)
+
+            for ei, Dit in tqdm(Di.iterrows(), total=len(Di), desc=desc):
+                # print(ei, Dit)
+                # Draw an event
+                t, u = Dit[['date_id', 'user_id']]
+                # print(Dit)
+                # print(t, u)
+
+                if t == 0:
+                    # events caused by background intensity
+                    self.Z[ii][ei] = -1
+                    continue
+                
+                # Reset z_in
+                
+                z_prev = self.Z[ii][ei]
+                u_prev = -1 if z_prev == -1 else Di.iloc[z_prev]['user_id']
+                self.M[u_prev, u] -= 1
+
+                # Compute a distribution to draw a causal event
+
+                Dy = Di.query('date_id<@t')
+                ny = len(Dy)
+                pz = np.zeros(ny + 1)
+
+                # of events caused by the back ground intensity in item i
+                Mi = len(self.Z[ii][self.Z[ii] == -1])
+                Ci = self.T
+
+                pz[0] = (Mi + a) * (self.M[-1, u] + beta)
+                pz[0] /= (Ci + b) * (self.M[-1].sum() + beta * self.n_users)
+
+                for y, Dyi in Dy.iterrows():
+
+                    ty, uy = Dyi[['date_id', 'user_id']]
+                    num = (self.M[uy].sum() + a) * (self.M[uy, u] + beta)
+                    den = (self.Cu(self.T, gamma, uy) + b) * (self.M[uy].sum() + beta * self.n_users)
+                    pz[y + 1] = np.exp(-1 * gamma * (t - ty)) * num / den
+
+                pz = pz / pz.sum()  # normalize [0 1]
+
+                z = np.random.choice(np.arange(ny + 1, dtype=int), size=1, p=pz) - 1
+                self.Z[ii][ei] = z
+
+                uz = -1 if z == -1 else Di.iloc[z]['user_id']
+                self.M[uz, u] += 1
+
+    def Mu(self, u):
+        # u: -1:n_users-1
+        return self.M[u].sum()
+    
+    def Cu(self, T, gamma, u):
+        C = 0
+
+        for i, Di in enumerate(self.events):
+            t = Di.query('user_id==@u')['date_id'].values
+            C += (1 - np.exp(-1 * gamma * (T - t))).sum()
+
+        return C / gamma
+
+    def update_gamma(self, gamma, a, b):
+        """ Newton's method (Equation 29 and 30)
+        """
+        de1 = de2 = 0
+
+        for ii, (Di, Zi) in enumerate(zip(self.events, self.Z)):
+
+            idx = Zi > -1
+            Dit = Di.iloc[idx]['date_id'].values
+            Zit = Di.iloc[Zi[idx]]['date_id'].values
+            de1 -= (Dit - Zit).sum()
+
+        for u in range(self.n_users):
+
+            Au = self.compute_A(u, gamma)
+            # Mu = self.Mu(u)
+            Mu = self.M[u].sum(0)
+
+            val1 = (Mu + a) / (Au[0] + gamma * b)
+            val2 = -1 * Au[0] / gamma + Au[1]
+
+            de1 -= val1 * val2
+            de2 -= val1 * (Au[2] + val2 * (
+                (Au[1] + b) / (Au[0] + gamma + b) + 1 / gamma))
+
+        return max(0, gamma - de1 / de2)  # Equation (18)
+
+    def compute_A(self, u, gamma):
+        """ Subfunction for update_gamma
+        """
+
+        A0 = gamma * self.Cu(self.T, gamma, u)
+        A1 = A2 = 0
+        
+        for ii, Di in enumerate(self.events):
+
+            t = Di.query('user_id==@u')['date_id'].values  # array
+
+            diff = self.T - t
+            exp_mgamma_diff = np.exp(-1 * gamma * diff)
+
+            A1 += (exp_mgamma_diff * diff).sum()
+            A2 += (exp_mgamma_diff * np.power(diff, 2)).sum()
+
+        return A0, A1, A2
+
+    def update_beta(self, beta, minimum=1e-10):
+        """ Fixed-point iteration method """
+
+        # U+ means all practical users
+        # and the virtual user for background intensity
+        # digamma(0) = -inf
+        U = self.n_users
+        num = (digamma(self.M + beta) - digamma(beta)).sum()
+        # den = (digamma(self.M.sum(axis=1) + beta * U) - digamma(beta * U)).sum()
+
+        # https://tminka.github.io/papers/dirichlet/minka-dirichlet.pdf
+        # Equation (55)
+        # num = digamma(self.M + beta).sum() - digamma(beta)
+        den = digamma(self.M.sum(axis=1) + beta * U).sum() - digamma(beta * U)
+        # print()
+        # print('num', num)
+        # print('den', den)
+
+        # num = -1 * (self.n_users + 1) * self.n_users * digamma(beta)
+        # den = -1 * (self.n_users + 1) * digamma(beta * self.n_users)
+        # print()
+        # print('num', num)
+        # print('den', den)
+
+        # num += digamma(self.M + beta).sum()
+        # den += digamma(self.M.sum(axis=1) + beta * self.n_users).sum()
+        # print()
+        # print('num', num)
+        # print('den', den)
+
+        # for u in trange(-1, self.n_users, desc='UpdateBeta'):
+        #     num += sum([digamma(self.M[u, v] + beta) for v in range(self.n_users)])
+        #     den += digamma(self.Mu(-1) + beta * self.n_users)
+        
+        return max(minimum, beta * num / den)  # Equation (19)
+
+    def loglikelihood(self, gamma, beta, a, b):
+        # Joint loglikelihood, i.e., Equation (14)
+
+        I = self.n_items
+        U = self.n_users
+        T = self.T
+        sum_tin_tiz = 0
+
+        for Di, Zi in zip(self.events, self.Z):
+            index = Zi > -1
+            tin = Di.iloc[index]['date_id'].values
+            tiz = Di.iloc[Zi[index]]['date_id'].values
+            sum_tin_tiz += (tin - tiz).sum()
+
+        llh = -1 * gamma * sum_tin_tiz
+
+        llh += (U + I) * (a * np.log(b) - gammaln(a))
+
+        # m = U cup I
+
+        for m in range(U):
+            Mm_a = self.M[m].sum() + a
+            llh += gammaln(Mm_a)
+            llh -= (Mm_a) * (self.Cu(T, gamma, m) + b)
+
+        for m in range(I):
+            Zm = self.Z[m]
+            Mm_a = (Zm == -1).sum() + a
+            llh += gammaln(Mm_a)
+            llh -= (Mm_a) * np.log(self.Cu(T, gamma, m) + b)
+
+        llh += (U + 1) * (gammaln(beta * U) - U * gammaln(beta))
+
+        llh += gammaln(self.M + beta).sum()
+        llh -= gammaln(self.M.sum(axis=1) + beta * U).sum()
+
+        return llh
+
+    def inference(self):
+        pass
+
+    def save(self, fp, save_params_only=True, save_train_hist=True):
+
+        if save_params_only == True:
+            np.savetxt(fp + 'alpha_i.txt', self.alpha_i)
+            np.savetxt(fp + 'alpha_u.txt', self.alpha_i)
+            np.savetxt(fp + 'theta.txt', self.theta)
+            # np.savetxt(fp + 'Z.txt', )
+            np.savetxt(fp + 'M.txt', self.M)
+
+            if save_train_hist == True:
+                np.savetxt(fp + 'train_hist.txt', self.train_hist)
+
         else:
-            return np.sum(self.M[user_id, :])
-
-
-def C_u(T, gamma, user):
-    C = 0.
-    for i in range(n_items):
-        idx = np.where(D[i][:, 1] == user)[0]
-        if len(idx) == 0: continue
-        t = D[i][idx, 0] #.astype(np.float64)
-        C += np.sum(1 - np.exp(-gamma * (ws.T - t))) / gamma
-    return C
-
-def A_u0(T, gamma, user):
-    return gamma * C_u(T, gamma, user)
-
-# A'
-def A_u1(T, gamma, user):
-    val = 0.
-    for i in range(n_items):
-        idx = np.where(D[i][:, 1] == user)[0]
-        t = D[i][idx, 0] #.astype(np.float64)
-        val += np.sum(np.exp(-gamma * (T - t)) * (T - t))
-    return -1 * val
-# A''
-def A_u2(T, gamma, user):
-    val = 0.
-    for i in range(n_items):
-        idx = np.where(D[i][:, 1] == user)[0]
-        t = D[i][idx, 0] #.astype(np.float64)
-        val += np.sum(np.exp(-gamma * (T - t)) * np.power((T - t), 2))
-    return val
-
-def update_gamma(ws, gamma, a, b):
-    print('\nupdate gamma...')
-    deriv1 = deriv2 = 0.
-    for i in range(n_items):
-        idx = np.where(ws.Z[i] > -1)[0]
-        deriv1 += np.sum(D[i][idx, 0] - D[i][ws.Z[i][idx], 0])
-
-    progress = ProgressBar(0, n_users).start()
-    for user in range(n_users):
-        progress.update(user)
-        # compute components
-        Au0 = A_u0(ws.T, gamma, user)
-        Au1 = A_u1(ws.T, gamma, user)
-        Au2 = A_u2(ws.T, gamma, user)
-        val1 = (ws.Mu(user) + a) / (Au0 + gamma * b)
-        val2 = -1 * Au0 / gamma + Au1
-        # for first derivative
-        deriv1 += val1 * val2
-        # for second derivative
-        deriv2 += val1 * (Au2 + val2 * ((Au1 + b) / (Au0 + gamma * b) + 1 / gamma))
-    return gamma - deriv1 / deriv2 if gamma - deriv1 / deriv2 > 0 else ZERO
-
-def update_beta(ws, beta):
-    print('\nupdate beta...')
-    progress = ProgressBar(0, n_users + 1).start()
-    # for background intensity
-    term1 = np.sum([sp.digamma(ws.M_[u1] + beta * n_users)
-                    - sp.digamma(beta * n_users) for u1 in range(n_users)])
-    term2 = sp.digamma(ws.Mu(-1) + beta) - sp.digamma(beta)
-
-    for u0 in range(n_users):
-        progress.update(u0)
-        Mu = ws.Mu(u0)
-        if Mu == 0: continue
-        term1 += np.sum([sp.digamma(ws.M[u0, u1] + beta) - sp.digamma(beta) for u1 in range(n_users)])
-        term2 += sp.digamma(Mu + beta) - sp.digamma(beta)
-    return beta * term1 / term2
-
-def compute_lh(ws, gamma, beta, a, b):
-    # the joint likelihood p(D, Z| gamma, beta, a, b)
-    llh = cnt = 0
-    for i in range(n_items):
-        for n in range(len(D[i])):
-            zin = ws.Z[i][n]
-            if zin == -1: continue
-            llh += D[i][n, 0] - D[i][zin, 0]
-            cnt += 1
-    print('\n# of cascade:', cnt)
-    llh = -1 * gamma * llh
-
-    llh += (n_users + n_items) * np.log(np.power(b, a) / sp.gamma(a))
-    for u in range(n_users):
-        Mu = ws.Mu(u)
-        llh += np.log(sp.gamma(Mu + a))
-        llh -= (Mu + a) * np.log(C_u(ws.T, gamma, u) + b)
-    for i in range(n_items):
-        Mi = len(ws.Z[i][ws.Z[i] == -1])
-        llh += np.log(sp.gamma(Mi + a))
-        llh -= (Mi + a) * np.log(ws.T + b)
-
-    llh += (n_users + 1) * (sp.gammaln(beta * n_users) - n_users * sp.gammaln(beta))
-    llh += np.sum([sp.gammaln(ws.M_[u1] + beta) for u1 in range(n_users)])
-    llh -= sp.gammaln(ws.Mu(-1) + beta * n_users)
-    for u0 in range(n_users):
-        llh += np.sum([sp.gammaln(ws.M[u0, u1] + beta) for u1 in range(n_users)])
-        llh -= sp.gammaln(ws.Mu(u0) + beta * n_users)
-    return llh
-
-def sample_latent_index(ws, gamma, beta, a, b):
-    print('sampling latent indexes...')
-    progress = ProgressBar(0, n_items).start()
-    for item_id in range(n_items):
-        progress.update(item_id)
-        D_ = D[item_id]
-        for eid in range(len(D_)):
-            if eid == 0:
-                ws.Z[item_id][0] = -1
-                continue
-            tin, uin = D_[eid]
-            tin, uin = int(tin), int(uin)
-
-            # reset z_in
-            z_old = ws.Z[item_id][eid]
-            if z_old == -1:
-                ws.M_[uin] -= 1 # decrement
-            else:
-                _, u_old = D_[z_old]
-                ws.M[int(u_old), uin] -= 1 # decrement
-
-            ws.Z[item_id][eid] = -INF
-            pz = np.zeros(eid + 1)
-            # if y = 0
-            Mi = len(ws.Z[item_id][ws.Z[item_id] == -1])
-            pz[0] = Mi + a 
-            pz[0] /= ws.T + b
-            pz[0] *= ws.M_[uin] + beta
-            pz[0] /= ws.Mu(-1) + beta * n_users
-            # otherwise
-            for y in range(eid):
-                tiy, uiy = D_[y]
-                tiy, uiy = int(tiy), int(uiy)
-                pz[y + 1] = np.exp(-1 * gamma * (tin - tiy))
-                pz[y + 1] *= ws.Mu(uiy) + a
-                pz[y + 1] /= C_u(ws.T, gamma, uiy) + b
-                pz[y + 1] *= ws.M[uiy, uin] + beta
-                pz[y + 1] /= ws.Mu(uiy) + beta * n_users
-            pz[pz < ZERO] = ZERO
-            pz = pz / np.sum(pz)
-            cause = np.random.choice(np.arange(eid + 1), size=1, p=pz) - 1
-            ws.Z[item_id][eid] = cause
-            if not cause == -1:
-                uiz = int(D_[cause, 1])
-                ws.M[uiz, uin] += 1
-            else:
-                ws.M_[uin] += 1
-
-def inference(ws, gamma=1, beta=2, a=1, b=1):
-    # stochastic EM algorithm
-    prev = -INF
-    buff = 0
-    for i in range(MAX_ITER):
-        print('============')
-        print('Iter: ', i + 1)
-        print('============')
-
-        # E step
-        sample_latent_index(ws, gamma, beta, a, b)
-
-        # M step
-        gamma = update_gamma(ws, gamma, a, b)
-        if gamma < 0:
-            exit('invalid gamma')
-        beta = update_beta(ws, beta)
-
-        lh = compute_lh(ws, gamma, beta, a, b)
-        print('\n\nGamma =', gamma)
-        print('\n\nBeta  =', beta)
-        diff = lh - prev
-        if diff > 0:
-            print('\nL-likelihood = {0} (+{1})\n'.format(lh, lh - prev))
-        else:
-            print('\nL-likelihood = {0} ({1})\n'.format(lh, lh - prev))
-        prev = lh
-        if np.fabs(diff) < TH:
-            buff += 1
-            if buff > 10:
-                break
-
-    Mi = np.array([len(ws.Z[i][ws.Z[i] == -1]) for i in range(n_items)])
-    Mu = np.array([ws.Mu(u) for u in range(n_users)])
-    Ci = ws.T
-    Cu = np.array([C_u(ws.T, gamma, u) for u in range(n_users)])
-
-    alpha_i = (Mi + a) / (Ci + b)
-    alpha_u = (Mu + a) / (Cu + b)
-    theta_uu = np.zeros((n_users, n_users))
-    for u in range(n_users):
-        theta_uu[u] = (ws.M[u] + beta) / (Mu[u] + beta * n_users)
-
-    if os.path.exists(OUTDIR):
-        shutil.rmtree(OUTDIR)
-    os.mkdir(OUTDIR)
-    with open(OUTDIR + 'gamma', 'r') as f:
-        f.write(gamma)
-    with open(OUTDIR + 'beta', 'r') as f:
-        f.write(beta)
-    np.savetxt(OUTDIR + 'alpha_i', alpha_i)
-    np.savetxt(OUTDIR + 'alpha_u', alpha_u)
-    np.savetxt(OUTDIR + 'theta_uu', theta_uu)
-
-
-if __name__ == '__main__':
-
-    # load marked point process
-    n_items, n_users = int(sys.argv[1]), int(sys.argv[2])
-    D = import_data(n_items, n_users)
-
-    ws = Workspace(n_items, n_users)
-
-    inference(ws)
+            with open(fp + 'scpp.pkl', 'wb') as f:
+                pickle.dump(self, f)
