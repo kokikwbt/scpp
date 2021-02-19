@@ -97,7 +97,8 @@ def update_beta(ws, beta):
     print('\nupdate beta...')
     progress = ProgressBar(0, n_users + 1).start()
     # for background intensity
-    term1 = np.sum([sp.digamma(ws.M_[u1] + beta * n_users) - sp.digamma(beta * n_users) for u1 in range(n_users)])
+    term1 = np.sum([sp.digamma(ws.M_[u1] + beta * n_users)
+                    - sp.digamma(beta * n_users) for u1 in range(n_users)])
     term2 = sp.digamma(ws.Mu(-1) + beta) - sp.digamma(beta)
 
     for u0 in range(n_users):
