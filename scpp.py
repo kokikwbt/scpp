@@ -7,9 +7,11 @@
     on Knowledge discovery and data mining. 2013.
 """
 
-import warnings
 import pickle
+import time
+import warnings
 import numpy as np
+import pandas as pd
 from scipy.special import digamma, gammaln
 from tqdm import tqdm, trange
 
@@ -46,6 +48,8 @@ class SCPP():
 
         self.n_items = data['item_id'].max() + 1
         self.n_users = data['user_id'].max() + 1
+        # Ensure the starting time point to be zero
+        data['date_id'] -= data['date_id'].min()
         self.T = data['date_id'].max()
 
         # List of event history per item
@@ -54,6 +58,13 @@ class SCPP():
         for i in range(self.n_items):
             self.events.append(
                 data.query('item_id==@i').sort_values('date_id').reset_index())
+
+        D = pd.concat(self.events)
+        self.tu = [
+            D.query('user_id==@u')['date_id'].values
+            if len(D.query('user_id==@u')) > 0 else np.nan
+            for u in range(self.n_users)
+        ]
 
     def fit(self, data, gamma=1, beta=2, a=1, b=1,
             max_iter=100, tol=1e+2, min_gamma=1e-10, max_beta=1e+12,
@@ -141,6 +152,10 @@ class SCPP():
 
                 Dy = Di.query('date_id<@t')
                 ny = len(Dy)
+                ty = Dy['date_id'].values  # array (len(Dy),)
+                uy = Dy['user_id'].values
+                # print(ny)
+                # print(uy)
                 pz = np.zeros(ny + 1)
 
                 # of events caused by the back ground intensity in item i
@@ -150,15 +165,23 @@ class SCPP():
                 pz[0] = (Mi + a) * (self.M[-1, u] + beta)
                 pz[0] /= (Ci + b) * (self.M[-1].sum() + beta * self.n_users)
 
-                for y, Dyi in Dy.iterrows():
+                Muy = self.M[uy].sum(axis=1)
+                num = (Muy + a) * (self.M[uy, u] + beta)
+                den = (self.Cu(self.T, gamma, uy) + b) * (Muy + beta * self.n_users)
+                pz[1:] = np.exp(-1 * gamma * (t - ty)) * num / den
 
-                    ty, uy = Dyi[['date_id', 'user_id']]
-                    num = (self.M[uy].sum() + a) * (self.M[uy, u] + beta)
-                    den = (self.Cu(self.T, gamma, uy) + b) * (self.M[uy].sum() + beta * self.n_users)
-                    pz[y + 1] = np.exp(-1 * gamma * (t - ty)) * num / den
+                # tic = time.process_time()
+                # for y, Dyi in Dy.iterrows():
+
+                #     ty, uy = Dyi[['date_id', 'user_id']]
+                #     num = (self.M[uy].sum() + a) * (self.M[uy, u] + beta)
+                #     den = (self.Cu(self.T, gamma, uy) + b) * (self.M[uy].sum() + beta * self.n_users)
+                #     pz[y + 1] = np.exp(-1 * gamma * (t - ty)) * num / den
 
                 pz = pz / pz.sum()  # normalize [0 1]
 
+                # toc = time.process_time() - tic
+                # print(toc, 'sec')
                 z = np.random.choice(np.arange(ny + 1, dtype=int), size=1, p=pz) - 1
                 self.Z[ii][ei] = z
 
@@ -168,15 +191,26 @@ class SCPP():
     def Mu(self, u):
         # u: -1:n_users-1
         return self.M[u].sum()
-    
+
     def Cu(self, T, gamma, u):
-        C = 0
 
-        for i, Di in enumerate(self.events):
-            t = Di.query('user_id==@u')['date_id'].values
-            C += (1 - np.exp(-1 * gamma * (T - t))).sum()
+        if type(u) == int:
+            C = 0
+            for i, Di in enumerate(self.events):
+                t = Di.query('user_id==@u')['date_id'].values
+                C += (1 - np.exp(-1 * gamma * (T - t))).sum()
 
-        return C / gamma
+            return C / gamma
+
+        elif type(u) == np.ndarray:
+
+            def _Cu(u):
+                if u is None: return 0
+                return (1 - np.exp(-1 * gamma * (T - self.tu[u]))).sum()
+
+            vCu = np.vectorize(_Cu)
+            C = vCu(u)  # C: array
+            return C / gamma
 
     def update_gamma(self, gamma, a, b):
         """ Newton's method (Equation 29 and 30)
@@ -299,6 +333,10 @@ class SCPP():
         return llh
 
     def inference(self):
+        pass
+
+    def simulate(self, step_size):
+        """ Algorithm 1 """
         pass
 
     def save(self, fp, save_params_only=True, save_train_hist=True):
