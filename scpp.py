@@ -68,14 +68,14 @@ class SCPP():
 
     def _init_function(self):
 
-        def _Cu(u, gamma):
+        def Cu(u, gamma):
             if u is None:
                 return 0
             else:
                 diff = self.T - self.tu[u]
                 return (1 - np.exp(-1 * gamma * (diff))).sum() / gamma
 
-        self.vCu = np.vectorize(_Cu)
+        self.vCu = np.vectorize(Cu)
 
     def fit(self, data, gamma=1, beta=2, a=1, b=1,
             max_iter=100, tol=1e+2, min_gamma=1e-10, max_beta=1e+12,
@@ -91,11 +91,11 @@ class SCPP():
 
         for iteration in range(max_iter):
 
-            # E step
+            # E-step
 
             self.collapsed_gibbs_sampling(beta, gamma, a, b)
 
-            # M step
+            # M-step
 
             gamma = self.update_gamma(gamma, a, b)
             beta  = self.update_beta(beta)
@@ -125,7 +125,6 @@ class SCPP():
         Mu = self.M.sum(axis=1)
         Ci = self.T
         Cu = self.vCu[np.arange(self.n_users, dtype=int), gamma]
-        # Cu = np.array([self.Cu(Ci, gamma, u) for u in range(self.n_users)])
 
         self.alpha_i = (Mi + a) / (Ci + b)
         self.alpha_u = (Mu + a) / (Cu + b)
@@ -137,17 +136,11 @@ class SCPP():
 
     def collapsed_gibbs_sampling(self, beta, gamma, a, b):
 
-        # desc = 'CollapsedGibbsSampling'
         for ii, Di in enumerate(self.events):
-
             desc = 'Item {}'.format(ii + 1)
 
             for ei, Dit in tqdm(Di.iterrows(), total=len(Di), desc=desc):
-                # print(ei, Dit)
-                # Draw an event
                 t, u = Dit[['date_id', 'user_id']]
-                # print(Dit)
-                # print(t, u)
 
                 if t == 0:
                     # events caused by background intensity
@@ -166,8 +159,7 @@ class SCPP():
                 ny = len(Dy)
                 ty = Dy['date_id'].values  # array (len(Dy),)
                 uy = Dy['user_id'].values
-                # print(ny)
-                # print(uy)
+
                 pz = np.zeros(ny + 1)
 
                 # of events caused by the back ground intensity in item i
@@ -182,9 +174,6 @@ class SCPP():
                 den = (self.vCu(uy, gamma) + b) * (Muy + beta * self.n_users)
                 pz[1:] = np.exp(-1 * gamma * (t - ty)) * num / den
 
-                # tic = time.process_time()
-                # for y, Dyi in Dy.iterrows():
-
                 #     ty, uy = Dyi[['date_id', 'user_id']]
                 #     num = (self.M[uy].sum() + a) * (self.M[uy, u] + beta)
                 #     den = (self.Cu(self.T, gamma, uy) + b) * (self.M[uy].sum() + beta * self.n_users)
@@ -192,17 +181,11 @@ class SCPP():
 
                 pz = pz / pz.sum()  # normalize [0 1]
 
-                # toc = time.process_time() - tic
-                # print(toc, 'sec')
                 z = np.random.choice(np.arange(ny + 1, dtype=int), size=1, p=pz) - 1
                 self.Z[ii][ei] = z
 
                 uz = -1 if z == -1 else Di.iloc[z]['user_id']
                 self.M[uz, u] += 1
-
-    def Mu(self, u):
-        # u: -1:n_users-1
-        return self.M[u].sum()
 
     def Cu(self, T, gamma, u):
 
@@ -272,21 +255,12 @@ class SCPP():
         # Equation (55)
         # num = digamma(self.M + beta).sum() - digamma(beta)
         den = digamma(self.M.sum(axis=1) + beta * U).sum() - digamma(beta * U)
-        # print()
-        # print('num', num)
-        # print('den', den)
 
         # num = -1 * (self.n_users + 1) * self.n_users * digamma(beta)
         # den = -1 * (self.n_users + 1) * digamma(beta * self.n_users)
-        # print()
-        # print('num', num)
-        # print('den', den)
 
         # num += digamma(self.M + beta).sum()
         # den += digamma(self.M.sum(axis=1) + beta * self.n_users).sum()
-        # print()
-        # print('num', num)
-        # print('den', den)
 
         # for u in trange(-1, self.n_users, desc='UpdateBeta'):
         #     num += sum([digamma(self.M[u, v] + beta) for v in range(self.n_users)])
@@ -309,7 +283,6 @@ class SCPP():
             sum_tin_tiz += (tin - tiz).sum()
 
         llh = -1 * gamma * sum_tin_tiz
-
         llh += (U + I) * (a * np.log(b) - gammaln(a))
 
         # m = U cup I
@@ -326,14 +299,10 @@ class SCPP():
             llh -= (Mm_a) * np.log(self.Cu(T, gamma, m) + b)
 
         llh += (U + 1) * (gammaln(beta * U) - U * gammaln(beta))
-
         llh += gammaln(self.M + beta).sum()
         llh -= gammaln(self.M.sum(axis=1) + beta * U).sum()
 
         return llh
-
-    def inference(self):
-        pass
 
     def simulate(self, step_size):
         """ Algorithm 1 """
@@ -345,7 +314,6 @@ class SCPP():
             np.savetxt(fp + 'alpha_i.txt', self.alpha_i)
             np.savetxt(fp + 'alpha_u.txt', self.alpha_i)
             np.savetxt(fp + 'theta.txt', self.theta)
-            # np.savetxt(fp + 'Z.txt', )
             np.savetxt(fp + 'M.txt', self.M)
 
             if save_train_hist == True:
