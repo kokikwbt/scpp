@@ -66,6 +66,17 @@ class SCPP():
             for u in range(self.n_users)
         ]
 
+    def _init_function(self):
+
+        def _Cu(u, gamma):
+            if u is None:
+                return 0
+            else:
+                diff = self.T - self.tu[u]
+                return (1 - np.exp(-1 * gamma * (diff))).sum() / gamma
+
+        self.vCu = np.vectorize(_Cu)
+
     def fit(self, data, gamma=1, beta=2, a=1, b=1,
             max_iter=100, tol=1e+2, min_gamma=1e-10, max_beta=1e+12,
             verbose=True):
@@ -74,6 +85,7 @@ class SCPP():
 
         self._prep_transaction(data)
         self._init_variables()
+        self._init_function()
 
         self.train_hist = []  # history of loglikelihood
 
@@ -110,16 +122,16 @@ class SCPP():
         # Compute results
 
         Mi = np.array([(Zi == -1).sum() for Zi in self.Z])  #
-        Mu = np.array([self.Mu(u) for u in range(self.n_users)])
+        Mu = self.M.sum(axis=1)
         Ci = self.T
-        Cu = np.array([self.Cu(Ci, gamma, u) for u in range(self.n_users)])
+        Cu = self.vCu[np.arange(self.n_users, dtype=int), gamma]
+        # Cu = np.array([self.Cu(Ci, gamma, u) for u in range(self.n_users)])
 
         self.alpha_i = (Mi + a) / (Ci + b)
         self.alpha_u = (Mu + a) / (Cu + b)
 
         self.theta = np.array([
-            (self.M[u] + beta)
-            / (self.Mu(u) + beta * self.n_users)
+            (self.M[u] + beta) / (Mu[u] + beta * self.n_users)
             for u in range(self.n_users)
         ])
 
@@ -167,7 +179,7 @@ class SCPP():
 
                 Muy = self.M[uy].sum(axis=1)
                 num = (Muy + a) * (self.M[uy, u] + beta)
-                den = (self.Cu(self.T, gamma, uy) + b) * (Muy + beta * self.n_users)
+                den = (self.vCu(uy, gamma) + b) * (Muy + beta * self.n_users)
                 pz[1:] = np.exp(-1 * gamma * (t - ty)) * num / den
 
                 # tic = time.process_time()
@@ -194,23 +206,12 @@ class SCPP():
 
     def Cu(self, T, gamma, u):
 
-        if type(u) == int:
-            C = 0
-            for i, Di in enumerate(self.events):
-                t = Di.query('user_id==@u')['date_id'].values
-                C += (1 - np.exp(-1 * gamma * (T - t))).sum()
+        C = 0
+        for i, Di in enumerate(self.events):
+            t = Di.query('user_id==@u')['date_id'].values
+            C += (1 - np.exp(-1 * gamma * (T - t))).sum()
 
-            return C / gamma
-
-        elif type(u) == np.ndarray:
-
-            def _Cu(u):
-                if u is None: return 0
-                return (1 - np.exp(-1 * gamma * (T - self.tu[u]))).sum()
-
-            vCu = np.vectorize(_Cu)
-            C = vCu(u)  # C: array
-            return C / gamma
+        return C / gamma
 
     def update_gamma(self, gamma, a, b):
         """ Newton's method (Equation 29 and 30)
@@ -227,8 +228,7 @@ class SCPP():
         for u in range(self.n_users):
 
             Au = self.compute_A(u, gamma)
-            # Mu = self.Mu(u)
-            Mu = self.M[u].sum(0)
+            Mu = self.M[u].sum()
 
             val1 = (Mu + a) / (Au[0] + gamma * b)
             val2 = -1 * Au[0] / gamma + Au[1]
