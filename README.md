@@ -1,6 +1,6 @@
 # SCPP: Schared Cascade Poisson Process
 
-Repository to study on "Discovering latent influence in online social activities via shared cascade poisson processes" proposed in [[1]](www.kecl.ntt.co.jp/as/members/iwata/kdd2013.pdf).
+Repository to study "Discovering latent influence in online social activities via shared cascade poisson processes" proposed in [[1]](www.kecl.ntt.co.jp/as/members/iwata/kdd2013.pdf).
 
 ## Datasets
 
