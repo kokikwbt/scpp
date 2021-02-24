@@ -1,8 +1,7 @@
 import argparse
-import os
-import shutil
 import pandas as pd
 import scpp
+import util
 
 
 parser = argparse.ArgumentParser()
@@ -20,14 +19,8 @@ parser.add_argument('--replace_outdir', action='store_true')
 
 args = parser.parse_args()
 
-
-if args.replace_outdir == True:
-    if os.path.exists(args.output_dir):
-        shutil.rmtree(args.output_dir)
-    os.makedirs(args.output_dir)
-else:
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
+util.prepare_workspace(args.output_dir,
+                       replace=args.replace_outdir)
 
 
 data = pd.read_csv(args.input_filename)
