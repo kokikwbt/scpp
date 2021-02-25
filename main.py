@@ -23,6 +23,8 @@ parser.add_argument('--sample_events', type=int, default=0)
 # Options
 
 parser.add_argument('--encode_timestamp', type=str, default=None)
+parser.add_argument('--encode_item', action='store_true')
+parser.add_argument('--encode_user', action='store_true')
 parser.add_argument('--replace_outdir', action='store_true')
 parser.add_argument('--save_train_hist', action='store_true')
 parser.add_argument('--save_params_only', action='store_true')
@@ -47,6 +49,16 @@ if args.encode_timestamp is not None:
         data,
         datetime_col=args.encode_timestamp,
         freq=args.freq)
+
+if args.encode_item == True:
+    data = util.encode_attribute(data, 'item')
+if args.encode_user == True:
+    data = util.encode_attribute(data, 'user')
+
+print()
+print("INPUT")
+print("=====")
+print(data.head())
 
 # Fit SCPP model
 

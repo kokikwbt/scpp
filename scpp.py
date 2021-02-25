@@ -62,6 +62,7 @@ class SCPP():
             self.events.append(df_event_i)
 
         D = pd.concat(self.events)
+
         self.tu = [
             D.query('user_id==@u')['date_id'].values
             if len(D.query('user_id==@u')) > 0 else np.nan
@@ -108,7 +109,7 @@ class SCPP():
             self.train_hist.append(llh)
 
             if (iteration > 2 and
-                np.abs(train_hist[-1] - train_hist[-2]) < tol):
+                np.abs(self.train_hist[-1] - self.train_hist[-2]) < tol):
                 break
 
             if verbose == True:
@@ -127,13 +128,20 @@ class SCPP():
 
     def collapsed_gibbs_sampling(self, beta, gamma, a, b):
 
-        for ii, Di in enumerate(self.events):
-            desc = 'Item {}'.format(ii + 1)
+        desc = "CollapsedGibbsSampling"
+        for ii, Di in enumerate(tqdm(self.events,
+                           total=len(self.events),
+                           desc=desc)):
+        # for ii, Di in enumerate(self.events):
+            # print(Di[['date_id', 'user_id']])
+            # desc = 'Item {}'.format(ii + 1)
+            first_point = Di.date_id.min()
 
-            for ei, Dit in tqdm(Di.iterrows(), total=len(Di), desc=desc):
+            # for ei, Dit in tqdm(Di.iterrows(), total=len(Di), desc=desc):
+            for ei, Dit in Di.iterrows():
                 t, u = Dit[['date_id', 'user_id']]
 
-                if t == 0:
+                if t == first_point:
                     # events caused by background intensity
                     self.Z[ii][ei] = -1
                     continue

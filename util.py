@@ -3,6 +3,7 @@
 import os
 import shutil
 import pandas as pd
+from sklearn import preprocessing
 
 
 def prepare_workspace(output_dir, replace=False):
@@ -29,6 +30,13 @@ def encode_timestamp(df, datetime_col='date', freq='D'):
     df = df.sort_values('date_id')
     df = df.reset_index()
     del df['index']
+    return df
+
+
+def encode_attribute(df, col):
+    le = preprocessing.LabelEncoder()
+    le.fit(df[col])
+    df[col + '_id'] = le.transform(df[col])
     return df
 
 
