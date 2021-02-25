@@ -6,28 +6,49 @@ import util
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('input_filename', type=str)
+parser.add_argument('--input_filename', type=str, default=None)
 parser.add_argument('--output_dir', type=str, default='out/tmp/')
 parser.add_argument('--gamma', type=float, default=1)
 parser.add_argument('--beta', type=float, default=1)
 parser.add_argument('--a', type=float, default=1)
 parser.add_argument('--b', type=float, default=1)
 
+# Learning setting
+
+parser.add_argument('--freq', type=str, default='D')
+parser.add_argument('--tol', type=float, default=10)
+parser.add_argument('--max_iter', type=int, default=100)
+parser.add_argument('--sample_events', type=int, default=0)
+
 # Options
 
-parser.add_argument('--max_iter', type=int, default=100)
-parser.add_argument('--tol', type=float, defalut=10)
+parser.add_argument('--encode_timestamp', type=str, default=None)
 parser.add_argument('--replace_outdir', action='store_true')
-parser.add_argument('--save_params_only', action='store_true')
 parser.add_argument('--save_train_hist', action='store_true')
+parser.add_argument('--save_params_only', action='store_true')
 
 args = parser.parse_args()
+
+if args.input_filename is None:
+    raise ValueError("Specify your input filename")
 
 util.prepare_workspace(args.output_dir,
                        replace=args.replace_outdir)
 
+# Data preparaion
+
 data = pd.read_csv(args.input_filename)
-data = data.sample(2000).sort_values('date_id').reset_index()
+
+if args.sample_events > 0:
+    data = util.sample_events(data, args.sample_events)
+
+if args.encode_timestamp is not None:
+    data = util.encode_timestamp(
+        data,
+        datetime_col=args.encode_timestamp,
+        freq=args.freq)
+
+# Fit SCPP model
 
 model = scpp.SCPP()
 
