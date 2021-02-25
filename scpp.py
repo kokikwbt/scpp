@@ -48,16 +48,18 @@ class SCPP():
 
         self.n_items = data['item_id'].max() + 1
         self.n_users = data['user_id'].max() + 1
+
         # Ensure the starting time point to be zero
         data['date_id'] -= data['date_id'].min()
         self.T = data['date_id'].max()
 
-        # List of event history per item
+        self.events = []  # List of event history per item
 
-        self.events = []
         for i in range(self.n_items):
-            self.events.append(
-                data.query('item_id==@i').sort_values('date_id').reset_index())
+            df_event_i = data.query('item_id==@i') \
+                             .reset_index()
+
+            self.events.append(df_event_i)
 
         D = pd.concat(self.events)
         self.tu = [
@@ -105,8 +107,9 @@ class SCPP():
             llh = self.loglikelihood(gamma, beta, a, b)
             self.train_hist.append(llh)
 
-            # if iteration > 2 and train_hist[-1] - train_hist[-2] < tol:
-            #     break
+            if (iteration > 2 and
+                np.abs(train_hist[-1] - train_hist[-2]) < tol):
+                break
 
             if verbose == True:
                 print()
@@ -120,19 +123,7 @@ class SCPP():
                 print()
 
         # Compute results
-
-        Mi = np.array([(Zi == -1).sum() for Zi in self.Z])  #
-        Mu = self.M.sum(axis=1)
-        Ci = self.T
-        Cu = self.vCu[np.arange(self.n_users, dtype=int), gamma]
-
-        self.alpha_i = (Mi + a) / (Ci + b)
-        self.alpha_u = (Mu + a) / (Cu + b)
-
-        self.theta = np.array([
-            (self.M[u] + beta) / (Mu[u] + beta * self.n_users)
-            for u in range(self.n_users)
-        ])
+        self.compute_params(gamma, beta, a, b)
 
     def collapsed_gibbs_sampling(self, beta, gamma, a, b):
 
@@ -173,12 +164,6 @@ class SCPP():
                 num = (Muy + a) * (self.M[uy, u] + beta)
                 den = (self.vCu(uy, gamma) + b) * (Muy + beta * self.n_users)
                 pz[1:] = np.exp(-1 * gamma * (t - ty)) * num / den
-
-                #     ty, uy = Dyi[['date_id', 'user_id']]
-                #     num = (self.M[uy].sum() + a) * (self.M[uy, u] + beta)
-                #     den = (self.Cu(self.T, gamma, uy) + b) * (self.M[uy].sum() + beta * self.n_users)
-                #     pz[y + 1] = np.exp(-1 * gamma * (t - ty)) * num / den
-
                 pz = pz / pz.sum()  # normalize [0 1]
 
                 z = np.random.choice(np.arange(ny + 1, dtype=int), size=1, p=pz) - 1
@@ -267,6 +252,22 @@ class SCPP():
         #     den += digamma(self.Mu(-1) + beta * self.n_users)
         
         return max(minimum, beta * num / den)  # Equation (19)
+
+    def compute_params(self, gamma, beta, a, b):
+        self.gamma = gamma
+        self.beta  = beta
+        self.a = a
+        self.b = b
+
+        Mi = np.array([(Zi == -1).sum() for Zi in self.Z])
+        Mu = self.M.sum(axis=1)
+        Ci = self.T
+        Cu = self.vCu(np.arange(self.n_users, dtype=int), gamma)
+        Cu[np.isnan(Cu)] = 0
+
+        self.alpha_i = (Mi + a) / (Ci + b)
+        self.alpha_u = (Mu[:-1] + a) / (Cu + b)
+        self.theta = self.M[:-1] / (Mu[:-1] + beta * self.n_users)
 
     def loglikelihood(self, gamma, beta, a, b):
         # Joint loglikelihood, i.e., Equation (14)

@@ -26,10 +26,13 @@ def encode_timestamp(df, datetime_col='date', freq='D'):
         date_index = (df[datetime_col] - df[datetime_col].min()).dt.days.values
 
     df['date_id'] = date_index
+    df = df.sort_values('date_id')
+    df = df.reset_index()
+    del df['index']
     return df
 
 
 def sample_events(df, n):
-    df = df.sample(n)
-    df['date_id'] = df['date_id'].min()
-    return df.sort_values('date_id').reset_index()
+    df = df.sample(n).reset_index()
+    del df['index']
+    return df
