@@ -16,8 +16,8 @@ parser.add_argument('--b', type=float, default=1)
 # Learning setting
 
 parser.add_argument('--freq', type=str, default='D')
-parser.add_argument('--tol', type=float, default=10)
-parser.add_argument('--max_iter', type=int, default=100)
+parser.add_argument('--tol', type=float, default=1e+3)
+parser.add_argument('--max_iter', type=int, default=10)
 parser.add_argument('--sample_events', type=int, default=0)
 
 # Options

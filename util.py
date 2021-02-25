@@ -41,6 +41,9 @@ def encode_attribute(df, col):
 
 
 def sample_events(df, n):
-    df = df.sample(n).reset_index()
-    del df['index']
-    return df
+    if len(df) <= n:
+        return df
+    else:
+        df = df.sample(n).reset_index()
+        del df['index']
+        return df

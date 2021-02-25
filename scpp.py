@@ -81,7 +81,7 @@ class SCPP():
         self.vCu = np.vectorize(Cu)
 
     def fit(self, data, gamma=1, beta=2, a=1, b=1,
-            max_iter=100, tol=1e+2, min_gamma=1e-10, max_beta=1e+12,
+            max_iter=100, tol=1e+3, min_gamma=1e-10, max_beta=1e+12,
             verbose=True):
 
         # Initialization
@@ -110,6 +110,7 @@ class SCPP():
 
             if (iteration > 2 and
                 np.abs(self.train_hist[-1] - self.train_hist[-2]) < tol):
+                print("EarlyStopping")
                 break
 
             if verbose == True:
