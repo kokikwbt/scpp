@@ -32,11 +32,14 @@ parser.add_argument('--retail', action='store_true')
 config = parser.parse_args()
 
 
-# Data preparaion
+# Data preparation
 if config.retail:
     data = pd.read_csv('data/retail_transaction.csv')
-    data = util.sample_events(data, 1000)
+    data = util.sample_events(data, 10000)
     data = util.encode_timestamp(data, 'date', 'D')
+    data = util.encode_attribute(data, col='item_id', prefix='item')
+    data = util.encode_attribute(data, col='user_id', prefix='user')
+    config.output_dir = 'out/retail/'
 
 else:
     if config.input_fn is None:
@@ -51,13 +54,14 @@ else:
         datetime_col=config.time_col,
         freq=config.sampling_rate)
 
-    data = util.encode_attribute(data, col=config.item_col)
-    data = util.encode_attribute(data, col=config.user_col)
+    data = util.encode_attribute(data, col=config.item_col, prefix='item')
+    data = util.encode_attribute(data, col=config.user_col, prefix='user')
 
 print()
 print(" INPUT ")
 print("=======")
-print(data.head())
+# print(data.head())
+print(data.nunique())
 print()
 
 util.prepare_workspace(config.output_dir, replace=config.replace_outdir)

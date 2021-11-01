@@ -100,7 +100,4 @@ ENV/
 # mypy
 .mypy_cache/
 
-data/
-results/*
-bin/*
-out/*
+out

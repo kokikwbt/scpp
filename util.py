@@ -33,11 +33,11 @@ def encode_timestamp(df, datetime_col='date', freq='D'):
     return df
 
 
-def encode_attribute(df, col):
+def encode_attribute(df, col, prefix):
 
     le = preprocessing.LabelEncoder()
     le.fit(df[col])
-    df[col + '_id'] = le.transform(df[col])
+    df[prefix + '_id'] = le.transform(df[col])
     return df
 
 

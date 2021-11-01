@@ -5,12 +5,11 @@
     Proceedings of the 19th ACM SIGKDD international conference
     on Knowledge discovery and data mining. 2013.
 """
-
-import pickle
+import time
 import numpy as np
 import pandas as pd
 from scipy.special import digamma, gammaln
-from tqdm import tqdm, trange
+from tqdm import tqdm
 
 
 class SCPP:
@@ -84,17 +83,16 @@ class SCPP:
         self.train_hist = []  # history of loglikelihood
 
         for iteration in range(max_iter):
+            tic = time.process_time()
 
             # E-step
-
             self.collapsed_gibbs_sampling(beta, gamma, a, b)
 
             # M-step
-
             gamma = self.update_gamma(gamma, a, b)
             beta  = self.update_beta(beta)
 
-            # Copmute loglikelihood
+            elapsed_time = time.process_time() - tic
 
             llh = self.loglikelihood(gamma, beta, a, b)
             self.train_hist.append(llh)
@@ -105,6 +103,7 @@ class SCPP:
                 print('gamma = {:.6f}'.format(gamma))
                 print('beta  = {:.6f}'.format(beta))
                 print('llh   = {:.3f}'.format(llh))
+                print('time  = {:.3f} [sec]'.format(elapsed_time))
                 print()
 
             if (iteration > 2 and
@@ -121,8 +120,7 @@ class SCPP:
             self.events, total=len(self.events), desc='Item')):
             first_point = Di.date_id.min()
 
-            # for ei, Dit in tqdm(Di.iterrows(), total=len(Di), desc=desc):
-            for ei, Dit in Di.iterrows():
+            for ei, Dit in tqdm(Di.iterrows(), total=len(Di), desc='Events'):
                 t, u = Dit[['date_id', 'user_id']]
 
                 if t == first_point:
@@ -131,13 +129,11 @@ class SCPP:
                     continue
                 
                 # Reset z_in
-                
                 z_prev = self.Z[ii][ei]
                 u_prev = -1 if z_prev == -1 else Di.iloc[z_prev]['user_id']
                 self.M[u_prev, u] -= 1
 
                 # Compute a distribution to draw a causal event
-
                 Dy = Di.query('date_id<@t')
                 ny = len(Dy)
                 ty = Dy['date_id'].values  # array (len(Dy),)
@@ -302,8 +298,8 @@ class SCPP:
         raise NotImplementedError
 
     def save(self, fp):
-        np.savetxt(fp + 'alpha_i.txt', self.alpha_i)
-        np.savetxt(fp + 'alpha_u.txt', self.alpha_i)
-        np.savetxt(fp + 'theta.txt', self.theta)
-        np.savetxt(fp + 'M.txt', self.M)
-        np.savetxt(fp + 'train_hist.txt', self.train_hist)
+        np.savetxt(fp + '/alpha_i.txt', self.alpha_i)
+        np.savetxt(fp + '/alpha_u.txt', self.alpha_u)
+        np.savetxt(fp + '/theta.txt', self.theta)
+        np.savetxt(fp + '/M.txt', self.M)
+        np.savetxt(fp + '/train_history.txt', self.train_hist)
