@@ -34,6 +34,7 @@ def encode_timestamp(df, datetime_col='date', freq='D'):
 
 
 def encode_attribute(df, col):
+
     le = preprocessing.LabelEncoder()
     le.fit(df[col])
     df[col + '_id'] = le.transform(df[col])
@@ -41,9 +42,8 @@ def encode_attribute(df, col):
 
 
 def sample_events(df, n):
-    if len(df) <= n:
+
+    if df.shape[0] <= n:
         return df
     else:
-        df = df.sample(n).reset_index()
-        del df['index']
-        return df
+        return df.sample(n).reset_index(drop=True)

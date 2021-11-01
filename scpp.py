@@ -1,5 +1,4 @@
 """ 
-    Reference:
     Iwata, Tomoharu, Amar Shah, and Zoubin Ghahramani.
     "Discovering latent influence in online social activities
     via shared cascade poisson processes."
@@ -8,19 +7,14 @@
 """
 
 import pickle
-import time
-import warnings
 import numpy as np
 import pandas as pd
 from scipy.special import digamma, gammaln
 from tqdm import tqdm, trange
 
 
-class SCPP():
+class SCPP:
     def __init__(self):
-
-        # Parameters
-
         self.alpha_i = None
         self.alpha_u = None
         self.theta = None
@@ -34,7 +28,7 @@ class SCPP():
         self.M = np.zeros((self.n_users + 1, self.n_users))
 
         # Assume that all events are caused by the back ground intensity
-        for ii, Di in enumerate(self.events):
+        for _, Di in enumerate(self.events):
             for u in range(self.n_users):
                 self.M[-1, u] += len(Di.query('user_id==@u'))
 
@@ -56,9 +50,7 @@ class SCPP():
         self.events = []  # List of event history per item
 
         for i in range(self.n_items):
-            df_event_i = data.query('item_id==@i') \
-                             .reset_index()
-
+            df_event_i = data.query('item_id==@i').reset_index()
             self.events.append(df_event_i)
 
         D = pd.concat(self.events)
@@ -81,8 +73,7 @@ class SCPP():
         self.vCu = np.vectorize(Cu)
 
     def fit(self, data, gamma=1, beta=2, a=1, b=1,
-            max_iter=100, tol=1e+3, min_gamma=1e-10, max_beta=1e+12,
-            verbose=True):
+            max_iter=100, tol=1e+3, verbose=True):
 
         # Initialization
 
@@ -108,34 +99,26 @@ class SCPP():
             llh = self.loglikelihood(gamma, beta, a, b)
             self.train_hist.append(llh)
 
+            if verbose == True and iteration > 0:
+                print()
+                print('iter  = {}'.format(iteration))
+                print('gamma = {:.6f}'.format(gamma))
+                print('beta  = {:.6f}'.format(beta))
+                print('llh   = {:.3f}'.format(llh))
+                print()
+
             if (iteration > 2 and
                 np.abs(self.train_hist[-1] - self.train_hist[-2]) < tol):
                 print("EarlyStopping")
                 break
-
-            if verbose == True:
-                print()
-                print()
-                print('=' * 20)
-                print(' Iteration =', iteration + 1)
-                print('=' * 20)
-                print(' gamma =', gamma)
-                print(' beta  =', beta)
-                print(' llh   =', llh)
-                print()
 
         # Compute results
         self.compute_params(gamma, beta, a, b)
 
     def collapsed_gibbs_sampling(self, beta, gamma, a, b):
 
-        desc = "CollapsedGibbsSampling"
-        for ii, Di in enumerate(tqdm(self.events,
-                           total=len(self.events),
-                           desc=desc)):
-        # for ii, Di in enumerate(self.events):
-            # print(Di[['date_id', 'user_id']])
-            # desc = 'Item {}'.format(ii + 1)
+        for ii, Di in enumerate(tqdm(
+            self.events, total=len(self.events), desc='Item')):
             first_point = Di.date_id.min()
 
             # for ei, Dit in tqdm(Di.iterrows(), total=len(Di), desc=desc):
@@ -316,19 +299,11 @@ class SCPP():
 
     def simulate(self, step_size):
         """ Algorithm 1 """
-        pass
+        raise NotImplementedError
 
-    def save(self, fp, save_params_only=True, save_train_hist=True):
-
-        if save_params_only == True:
-            np.savetxt(fp + 'alpha_i.txt', self.alpha_i)
-            np.savetxt(fp + 'alpha_u.txt', self.alpha_i)
-            np.savetxt(fp + 'theta.txt', self.theta)
-            np.savetxt(fp + 'M.txt', self.M)
-
-            if save_train_hist == True:
-                np.savetxt(fp + 'train_hist.txt', self.train_hist)
-
-        else:
-            with open(fp + 'scpp.pkl', 'wb') as f:
-                pickle.dump(self, f)
+    def save(self, fp):
+        np.savetxt(fp + 'alpha_i.txt', self.alpha_i)
+        np.savetxt(fp + 'alpha_u.txt', self.alpha_i)
+        np.savetxt(fp + 'theta.txt', self.theta)
+        np.savetxt(fp + 'M.txt', self.M)
+        np.savetxt(fp + 'train_hist.txt', self.train_hist)

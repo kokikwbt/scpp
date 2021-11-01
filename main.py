@@ -6,68 +6,70 @@ import util
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--input_filename', type=str, default=None)
+parser.add_argument('--input_fn', type=str, default=None)
 parser.add_argument('--output_dir', type=str, default='out/tmp/')
+parser.add_argument('--replace_outdir', action='store_true')
 parser.add_argument('--gamma', type=float, default=1)
 parser.add_argument('--beta', type=float, default=1)
 parser.add_argument('--a', type=float, default=1)
 parser.add_argument('--b', type=float, default=1)
 
 # Learning setting
-
-parser.add_argument('--freq', type=str, default='D')
-parser.add_argument('--tol', type=float, default=1e+3)
-parser.add_argument('--max_iter', type=int, default=10)
-parser.add_argument('--sample_events', type=int, default=0)
+parser.add_argument('--tol', type=float, default=100)
+parser.add_argument('--max_iter', type=int, default=20)
+parser.add_argument('--verbose', type=bool, default=True)
 
 # Options
+parser.add_argument('--time_col', type=str, default='date')
+parser.add_argument('--item_col', type=str, default='item')
+parser.add_argument('--user_col', type=str, default='user')
+parser.add_argument('--n_sample', type=int, default=100000)
+parser.add_argument('--sampling_rate', type=str, default='D')
 
-parser.add_argument('--encode_timestamp', type=str, default=None)
-parser.add_argument('--encode_item', action='store_true')
-parser.add_argument('--encode_user', action='store_true')
-parser.add_argument('--replace_outdir', action='store_true')
-parser.add_argument('--save_train_hist', action='store_true')
-parser.add_argument('--save_params_only', action='store_true')
+# DEMO
+parser.add_argument('--retail', action='store_true')
 
-args = parser.parse_args()
+config = parser.parse_args()
 
-if args.input_filename is None:
-    raise ValueError("Specify your input filename")
-
-util.prepare_workspace(args.output_dir,
-                       replace=args.replace_outdir)
 
 # Data preparaion
+if config.retail:
+    data = pd.read_csv('data/retail_transaction.csv')
+    data = util.sample_events(data, 1000)
+    data = util.encode_timestamp(data, 'date', 'D')
 
-data = pd.read_csv(args.input_filename)
+else:
+    if config.input_fn is None:
+        raise ValueError("Specify your input filename")
 
-if args.sample_events > 0:
-    data = util.sample_events(data, args.sample_events)
+    data = pd.read_csv(config.input_fn)
 
-if args.encode_timestamp is not None:
-    data = util.encode_timestamp(
-        data,
-        datetime_col=args.encode_timestamp,
-        freq=args.freq)
+    if config.n_sample > 0:
+        data = util.sample_events(data, config.n_sample)
 
-if args.encode_item == True:
-    data = util.encode_attribute(data, 'item')
-if args.encode_user == True:
-    data = util.encode_attribute(data, 'user')
+    data = util.encode_timestamp(data,
+        datetime_col=config.time_col,
+        freq=config.sampling_rate)
+
+    data = util.encode_attribute(data, col=config.item_col)
+    data = util.encode_attribute(data, col=config.user_col)
 
 print()
-print("INPUT")
-print("=====")
+print(" INPUT ")
+print("=======")
 print(data.head())
+print()
 
-# Fit SCPP model
+util.prepare_workspace(config.output_dir, replace=config.replace_outdir)
 
 model = scpp.SCPP()
-
 model.fit(data,
-          max_iter=args.max_iter,
-          tol=args.tol)
+          gamma=config.gamma,
+          beta=config.beta,
+          a=config.a,
+          b=config.b,
+          max_iter=config.max_iter,
+          tol=config.tol,
+          verbose=config.verbose)
 
-model.save(args.output_dir,
-           args.save_params_only,
-           args.save_train_hist)
+model.save(config.output_dir)
